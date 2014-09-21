@@ -1,0 +1,156 @@
+---
+title: "PracMacLrnProject092014"
+author: "John Ewert"
+date: "Wednesday, September 17, 2014"
+output: html_document
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+summary(cars)
+```
+
+You can also embed plots, for example:
+
+```{r, echo=FALSE}
+plot(cars)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Practical Machine Learning Course Project
+### September, 2014
+
+### Goal of Project
+The goal of the project is to predict how a certain exercise was performed, using machine learning methods on a supplied Human Activity Recognition dataset.
+
+### Data
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The twenty-example test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+The data comes from Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+Read more: http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz3DyysIdjA
+
+### Processing of Data
+The following code chunk reads the .csv data (testing and training) from the working directory.  Data is split 60/20/20 into training/cross-validation/testing sets.  I process the data to remove variables unlikely to be predictive of the outcome ("classe"). I looked for variables with near zero variance, variables that contained very little data (approximately 400 entries or fewer out of the 11,000+ observations in my training set), and variables that are highly correlated with other variables.  The result is a reduction from 160 variables to 46 variables.
+
+I separately remove the same variables from the twenty-example test set.
+
+```{r}
+# Load Data from active directory
+setwd("C:/Users/John/Documents/Coursera/PracMacLrn082014/Project")
+require(caret); require(psych); require(kernlab)
+pml <- read.csv("pml-training.csv")
+# Exclude sparse variables and near zero variance variables
+set.seed(310)
+inTrain <- createDataPartition(y=pml$classe, p=0.6, list=FALSE)
+training <- pml[inTrain,]
+testblock <- pml[-inTrain,]
+# split remaining data 50/50 into crossvalidation and testing
+inCV <- createDataPartition(y=testblock$classe, p=0.5, list=FALSE)
+crossVal <- testblock[inCV,]
+testing <- testblock[-inCV,]
+# run some diagnostics on training data
+nearZeroVar(training)
+describe(training)
+
+
+# remove unnecessary features
+trimmedTrain <- training[,-nearZeroVar(training)]
+descTrimmedTrain<- describe(trimmedTrain)
+trimmedTrain <- trimmedTrain[,descTrimmedTrain$vars[descTrimmedTrain$n > 406]]
+summary(trimmedTrain)
+trimmedTrain <- trimmedTrain[,-c(1,2,3,4,5,6)]
+# prepare crossval data and test data
+trimmedTest <- testing[,-nearZeroVar(training)]
+trimmedTest <- trimmedTest[,descTrimmedTrain$vars[descTrimmedTrain$n > 406]]
+trimmedTest <- trimmedTest[,-c(1,2,3,4,5,6)]
+trimmedCrossVal <- crossVal[,-nearZeroVar(training)]
+trimmedCrossVal <- trimmedCrossVal[,descTrimmedTrain$vars[descTrimmedTrain$n > 406]]
+trimmedCrossVal <- trimmedCrossVal[,-c(1,2,3,4,5,6)]
+# read and prepare assignment testing data
+testTwenty <- read.csv("pml-testing.csv")
+trimmedTwenty <- testTwenty[,-nearZeroVar(training)]
+trimmedTwenty <- trimmedTwenty[,descTrimmedTrain$vars[descTrimmedTrain$n > 406]]
+trimmedTwenty <- trimmedTwenty[,-c(1,2,3,4,5,6,59)]
+
+# find highly correlated features
+ncol(trimmedTrain)
+descrCorr <- cor(trimmedTrain[,-ncol(trimmedTrain)])
+highCorr <- findCorrelation(descrCorr, 0.90)
+trimmedTrain <- trimmedTrain[, -highCorr]
+trimmedCrossVal <- trimmedCrossVal[, -highCorr]
+trimmedTest <- trimmedTest[, -highCorr]
+trimmedTwenty <- trimmedTwenty[, -highCorr]
+ncol(trimmedTrain)
+```
+
+### Model Fitting
+For this classification problem, I decided to try a Random Forest model using the randomForest package in R. I use the rfcv() function to fit models using k-fold cross-validation with k = 10. The rfcv() function tries a range of values for the number of trees to grow.The plot shows that the cross-validation error levels substantially when the model reaches 11 trees.  For 11 trees, the error rate from the 10-fold cross-validation is 2.62%.
+```{r}
+require(randomForest)
+set.seed(7366)
+rfFit <- rfcv(trainx = trimmedTrain[,-ncol(trimmedTrain)], 
+              trainy = trimmedTrain$classe, cv.fold = 10, ntree = 12, keep.forest = TRUE, verbose = TRUE)
+with(rfFit, plot(n.var, error.cv, log="x", type="o", lwd=2))
+rfFit[1]
+```
+
+
+To see if these results hold on my cross-validation set, I fit three Random Forest models on the training set and calculate errors on the cross-validation set. The models use 6, 11, and 22 trees respectively. For the 11-tree model, Out-of-Bag estimate of error rate is 5.13%, and the error rate on the cross-validation set is 1.4%.
+
+```{r}
+set.seed(3840)
+rf1 <- randomForest(classe ~ ., trimmedTrain, ntree=6, keep.forest=T, 
+                    xtest=trimmedCrossVal[,-ncol(trimmedCrossVal)],
+                    ytest=trimmedCrossVal[,ncol(trimmedCrossVal)])
+rf1
+set.seed(3840)
+rf2 <- randomForest(classe ~ ., trimmedTrain, ntree=11, keep.forest=T, 
+                    xtest=trimmedCrossVal[,-ncol(trimmedCrossVal)],
+                    ytest=trimmedCrossVal[,ncol(trimmedCrossVal)], importance = TRUE)
+rf2
+
+set.seed(3840)
+rf3 <- randomForest(classe ~ ., trimmedTrain, ntree=22, keep.forest=T, 
+                    xtest=trimmedCrossVal[,-ncol(trimmedCrossVal)],
+                    ytest=trimmedCrossVal[,ncol(trimmedCrossVal)])
+rf3
+```
+
+The results of rfcv are generally confirmed by the three models above, so I select a model with that many trees and compare to my test data set. Error rate on my test set is 1.61%
+```{r}
+# Select rf2 (11 trees) for model. error.cv seems to become fairly level at 11 trees
+set.seed(3840)
+rf2 <- randomForest(classe ~ ., trimmedTrain, ntree=11, keep.forest=T, 
+                    xtest=trimmedTest[,-ncol(trimmedTest)],
+                    ytest=trimmedTest[,ncol(trimmedTest)], importance = TRUE)
+rf2
+```
+
+I expect the CV-data-based error rate and the k-fold cross-validation error rate to be somewhat low estimates of error on out-of-sample data. The out-of-bag estimate should be an unbiased estimate. Thus, I would not be surprised to see one error in my predictions of the twenty-example test. 
+
+Now I run the "rf2" model (11 tree Random Forest) on the twenty-example test set to produce "answers" to submit for the project.
+
+```{r}
+# get randomForest predictions on the testTwenty set
+answers <- predict(rf2, trimmedTwenty, type="response")
+```
+
+All of the answers proved to be correct upon submission.
+
+
+
+
+
